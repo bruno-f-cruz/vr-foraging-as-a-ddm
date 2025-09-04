@@ -3,6 +3,7 @@ from typing import Self
 from matplotlib import pyplot as plt
 import enum
 import dataclasses
+from rich.progress import track
 
 
 class ExponentialDistribution:
@@ -25,6 +26,14 @@ class Indicies(enum.IntEnum):
     REWARD = 2
 
 
+@dataclasses.dataclass
+class HarvestOutcome:
+    index: int
+    value: float
+    time: float
+    reward: float
+    is_rejected: bool
+
 class DDM:
     def __init__(
         self,
@@ -44,6 +53,7 @@ class DDM:
         self._state_history[Indicies.STATE, self._idx] = initial_state  # value
         self._state_history[Indicies.TIME, self._idx] = 0.0  # time
         # self._state_history[2, self._current_index] #Reward
+        self._choice_history: list[HarvestOutcome] = []
 
     @property
     def state_history(self) -> np.ndarray:
@@ -73,10 +83,28 @@ class DDM:
         )  # add a single dt
         self._state_history[Indicies.REWARD, self._idx + 1] = harvest
         self._idx += 1
+        self._choice_history.append(HarvestOutcome(
+            index=self._idx,
+            value=self._state_history[Indicies.STATE, self._idx],
+            time=self._state_history[Indicies.TIME, self._idx],
+            reward=harvest,
+            is_rejected=False,
+        ))
         return self
 
     def has_ended(self):
+        self.end()
         return self._state_history[Indicies.STATE, self._idx] >= self._threshold
+
+    def end(self) -> Self:
+        self._choice_history.append(HarvestOutcome(
+            index=self._idx,
+            value=self._state_history[Indicies.STATE, self._idx],
+            time=self._state_history[Indicies.TIME, self._idx],
+            reward=np.nan,
+            is_rejected=True,
+        ))
+        return self
 
     def plot(self):
         fig, axs = plt.subplots()
@@ -118,14 +146,15 @@ class RunResult:
         return (self.ddm.state_history[Indicies.REWARD, :] > 0).sum()
 
 
+
+
 def main():
-    N = 1000
+    N = 10000
     runs: list[RunResult] = []
     size_length_distribution = ExponentialDistribution(
         scale=1.0, min_bound=0.5, max_bound=5
     )
-
-    for i in range(N):
+    for i in track(range(N), description="Running simulations..."):
         run = RunResult(
             patch=Patch(reward_amount=0.01), ddm=DDM(drift_rate=0.25, noise_std=0.05)
         )
@@ -133,20 +162,17 @@ def main():
             size_length = size_length_distribution.sample()
             run.ddm.drift(size_length).harvest(run.patch)
         runs.append(run)
-        print(
-            f"Run {i + 1}/{N}: visited {run.n_sites_visited}, rewarded {run.n_sites_rewarded}"
-        )
 
     fig, axs = plt.subplots(1, 3, figsize=(15, 5))
-    axs[0].hist([r.n_sites_visited for r in runs], bins=20)
+    axs[0].hist([r.n_sites_visited for r in runs], bins=np.arange(0, 20, 1, dtype=int))
     axs[0].set_xlabel("Number of Sites Visited")
     axs[0].set_ylabel("Count")
 
-    axs[1].hist([r.n_sites_rewarded for r in runs], bins=20)
+    axs[1].hist([r.n_sites_rewarded for r in runs], bins=np.arange(0, 10, 1, dtype=int))
     axs[1].set_xlabel("Number of Sites Rewarded")
     axs[1].set_ylabel("Count")
 
-    for r in runs:
+    for r in runs[::100]:
         axs[2].plot(
             r.ddm.state_history[Indicies.TIME, : r.ddm._idx + 1],
             r.ddm.state_history[Indicies.STATE, : r.ddm._idx + 1],
