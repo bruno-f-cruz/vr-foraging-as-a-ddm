@@ -7,6 +7,7 @@ from rich.progress import Progress
 from itertools import product
 import multiprocessing as mp
 from pathlib import Path
+from utils import generate_results_html
 
 RESULTS_PATH = Path("./results")
 if not RESULTS_PATH.exists():
@@ -203,7 +204,7 @@ def run_with_params(
     site_distribution: ExponentialDistribution = ExponentialDistribution(
         scale=1.5, min_bound=0.5, max_bound=4
     ),
-):
+) -> list[RunResult]:
     runs: list[RunResult] = []
 
     for i in range(n_sim):
@@ -215,6 +216,10 @@ def run_with_params(
             run.ddm.travel(site_distribution.sample()).harvest(run.patch)
         runs.append(run)
 
+    return runs
+
+
+def plot_runs(runs: list[RunResult], fname: str):
     fig = plt.figure(figsize=(12, 6))
 
     ax = fig.add_subplot(2, 3, 1)
@@ -275,8 +280,8 @@ def run_with_params(
     ax.set_xlabel("Reward  #")
     ax.set_ylabel("Reward Probability")
     ax.set_ylim(-0.05, 1.05)
-    fname = f"reward_{reward_amount}_drift{drift_rate}_noise{noise_std}_site{site_distribution.scale}.png"
-    fig.suptitle(fname.replace(".png", ""))
+    fname = f"{fname}.png"
+    fig.suptitle(fname)
     fig.tight_layout()
     plt.savefig(
         RESULTS_PATH / fname,
@@ -287,18 +292,21 @@ def run_with_params(
 
 def run_simulation_worker(params):
     """Worker function for multiprocessing - no progress bar per subprocess"""
-    n_sim, drift_rate, noise_std, reward_amount, site_distribution = params
-    run_with_params(
-        n_sim=n_sim,
-        drift_rate=drift_rate,
-        noise_std=noise_std,
-        reward_amount=reward_amount,
-        site_distribution=site_distribution,
+    n_sim, drift_rate, noise_std, reward_amount, site_distribution, fname = params
+    plot_runs(
+        run_with_params(
+            n_sim=n_sim,
+            drift_rate=drift_rate,
+            noise_std=noise_std,
+            reward_amount=reward_amount,
+            site_distribution=site_distribution,
+        ),
+        fname=fname,
     )
 
 
 def main():
-    n_sim = 10000
+    n_sim = 10_000
     reward = [0.01, 0.05, 0.1, 0.2]
     drift_rate = [0.1, 0.25, 0.5]
     noise_std = [0, 0.01, 0.05, 0.1]
@@ -309,7 +317,7 @@ def main():
     ]
 
     param_combinations = [
-        (n_sim, d, n, r, site)
+        (n_sim, d, n, r, site, f"reward{r}_drift{d}_noise{n}_site{site.scale}")
         for r, d, n, site in product(reward, drift_rate, noise_std, site_distribution)
     ]
     total_combinations = len(param_combinations)
@@ -332,4 +340,5 @@ def main():
 
 
 if __name__ == "__main__":
-    main()  # Simple version
+    main()
+    generate_results_html(path=RESULTS_PATH)
