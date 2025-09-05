@@ -189,11 +189,15 @@ class RunResult:
     def flattened_consecutive_failures_x_outcome_x_reward(self) -> np.ndarray:
         failures = self.consecutive_failures()
         outcomes = np.array([not h.is_rejected for h in self.ddm.harvest_history])
+
         # The cumulative reward is up to but not including the current harvest
         rewards = np.concatenate(
             [[0], np.cumsum([h.reward for h in self.ddm.harvest_history])[:-1]]
         )
-        return np.stack([failures, outcomes, rewards], axis=1)
+        state_at_harvest = np.concatenate(
+            [[0], np.array([h.value for h in self.ddm.harvest_history])[:-1]]
+        )
+        return np.stack([failures, outcomes, rewards, state_at_harvest], axis=1)
 
 
 def run_with_params(
@@ -222,17 +226,17 @@ def run_with_params(
 def plot_runs(runs: list[RunResult], fname: str):
     fig = plt.figure(figsize=(12, 6))
 
-    ax = fig.add_subplot(2, 3, 1)
+    ax = fig.add_subplot(3, 3, 1)
     ax.hist([r.n_sites_visited for r in runs], bins=np.arange(0, 40, 1, dtype=int))
     ax.set_xlabel("Number of Sites Visited")
     ax.set_ylabel("Count")
 
-    ax = fig.add_subplot(2, 3, 2)
+    ax = fig.add_subplot(3, 3, 2)
     ax.hist([r.n_sites_rewarded for r in runs], bins=np.arange(0, 40, 1, dtype=int))
     ax.set_xlabel("Number of Sites Rewarded")
     ax.set_ylabel("Count")
 
-    ax = fig.add_subplot(2, 3, 3)
+    ax = fig.add_subplot(3, 3, 3)
     for r in runs[::100]:
         ax.plot(
             r.ddm.state_history[StateIndex.TIME, : r.ddm._idx + 1],
@@ -244,7 +248,7 @@ def plot_runs(runs: list[RunResult], fname: str):
     ax.set_xlabel("Time")
     ax.set_ylabel("DDM State (a.u.)")
 
-    ax = fig.add_subplot(2, 3, 4)
+    ax = fig.add_subplot(3, 3, 4)
     ax.hist([r.total_time for r in runs], bins=30)
     ax.set_xlabel("Total Time")
     ax.set_ylabel("Count")
@@ -267,19 +271,68 @@ def plot_runs(runs: list[RunResult], fname: str):
             if len(outcomes) > 0:
                 p_success[row, col] = outcomes.sum() / len(outcomes)
 
-    ax = fig.add_subplot(2, 3, 5)
+    ax = fig.add_subplot(3, 3, 5)
     im = ax.imshow(
-        p_success.T, aspect="auto", origin="lower", cmap="viridis", vmin=0, vmax=1
+        1 - (p_success).T, aspect="auto", origin="lower", cmap="YlGnBu", vmin=0, vmax=1
     )
     ax.set_xlabel("Consecutive Failures")
     ax.set_ylabel("Rewards collected")
     plt.colorbar(im, ax=ax)
 
-    ax = fig.add_subplot(2, 3, 6)
+    ax = fig.add_subplot(3, 3, 6)
     ax.plot([0.9 * (0.9**i) for i in range(20)], marker="o")
     ax.set_xlabel("Reward  #")
     ax.set_ylabel("Reward Probability")
     ax.set_ylim(-0.05, 1.05)
+
+    ax = fig.add_subplot(3, 3, 7)
+    means = []
+    stds = []
+    for r in n_unique_rewards:
+        state_at_failure = all_failures_x_outcome[all_failures_x_outcome[:, 2] == r]
+        means.append(state_at_failure[:, 3].mean())
+        stds.append(state_at_failure[:, 3].std())
+    ax.errorbar(n_unique_rewards, means, yerr=stds, marker="o", linestyle="--")
+    ax.set_ylabel("DDM State at Harvest")
+    ax.set_xlabel("Cumulative Reward")
+
+    ax = fig.add_subplot(3, 3, 8)
+    means = []
+    stds = []
+    for r in n_unique_failures:
+        state_at_failure = all_failures_x_outcome[all_failures_x_outcome[:, 0] == r]
+        means.append(state_at_failure[:, 3].mean())
+        stds.append(state_at_failure[:, 3].std())
+    ax.errorbar(n_unique_failures, means, yerr=stds, marker="o", linestyle="--")
+    ax.set_ylabel("DDM State at Harvest")
+    ax.set_xlabel("Cumulative failures")
+
+    all_failures_x_outcome = [
+        r.flattened_consecutive_failures_x_outcome_x_reward() for r in runs
+    ]
+    all_failures_x_outcome = np.concatenate(all_failures_x_outcome, axis=0)
+    n_unique_failures = np.sort(np.unique(all_failures_x_outcome[:, 0]))
+    n_unique_rewards = np.sort(np.unique(all_failures_x_outcome[:, 2]))
+    n_unique_rewards = n_unique_rewards[~np.isnan(n_unique_rewards)]  # remove nan
+    value_at = np.zeros((len(n_unique_failures), len(n_unique_rewards)))
+    for row, n_fail in enumerate(n_unique_failures):
+        for col, n_reward in enumerate(n_unique_rewards):
+            trials = (all_failures_x_outcome[:, 0] == n_fail) & (
+                all_failures_x_outcome[:, 2] == n_reward
+            )
+
+            value = all_failures_x_outcome[trials, 3]
+            if len(value) > 0:
+                value_at[row, col] = np.mean(value)
+
+    ax = fig.add_subplot(3, 3, 9)
+    im = ax.imshow(
+        1 - (value_at).T, aspect="auto", origin="lower", cmap="bwr", vmin=-2, vmax=2
+    )
+    ax.set_xlabel("Consecutive Failures")
+    ax.set_ylabel("Rewards collected")
+    plt.colorbar(im, ax=ax)
+
     fname = f"{fname}.png"
     fig.suptitle(fname)
     fig.tight_layout()
