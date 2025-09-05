@@ -4,6 +4,7 @@ from matplotlib import pyplot as plt
 import enum
 import dataclasses
 from rich.progress import track
+from itertools import product
 
 
 class ExponentialDistribution:
@@ -188,21 +189,26 @@ class RunResult:
         return np.stack([failures, outcomes, rewards], axis=1)
 
 
-def main():
-    N = 500000
+def run_with_params(
+    n_sim: int,
+    drift_rate: float = 0.25,
+    noise_std: float = 0.05,
+    reward_amount: float = 0.1,
+):
     runs: list[RunResult] = []
     size_length_distribution = ExponentialDistribution(
         scale=1.5, min_bound=0.5, max_bound=4
     )
-    for _ in track(range(N), description="Running simulations..."):
+    for _ in track(range(n_sim), description="Running simulations..."):
         run = RunResult(
-            patch=Patch(reward_amount=0.03), ddm=DDM(drift_rate=0.25, noise_std=0.05)
+            patch=Patch(reward_amount=reward_amount),
+            ddm=DDM(drift_rate=drift_rate, noise_std=noise_std),
         )
         while not run.ddm.has_ended():
             run.ddm.travel(size_length_distribution.sample()).harvest(run.patch)
         runs.append(run)
 
-    fig = plt.figure(figsize=(12, 4))
+    fig = plt.figure(figsize=(12, 6))
 
     ax = fig.add_subplot(2, 3, 1)
     ax.hist([r.n_sites_visited for r in runs], bins=np.arange(0, 20, 1, dtype=int))
@@ -261,7 +267,19 @@ def main():
     ax.set_xlabel("Reward  #")
     ax.set_ylabel("Reward Probability")
     ax.set_ylim(-0.05, 1.05)
-    plt.savefig("foraging_simulation_results.png", dpi=300)
+    plt.savefig(
+        f"reward_{reward_amount}_drift{drift_rate}_noise{noise_std}.png", dpi=300
+    )
+
+
+def main():
+    n_sim = 10_000
+    reward = [0.01, 0.05, 0.1, 0.2]
+    drift_rate = [0.1, 0.25, 0.5]
+    noise_std = [0.01, 0.05, 0.1]
+
+    for r, d, n in product(reward, drift_rate, noise_std):
+        run_with_params(n_sim=n_sim, drift_rate=d, noise_std=n, reward_amount=r)
 
 
 if __name__ == "__main__":
