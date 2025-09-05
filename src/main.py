@@ -3,8 +3,14 @@ from typing import Self
 from matplotlib import pyplot as plt
 import enum
 import dataclasses
-from rich.progress import track
+from rich.progress import Progress
 from itertools import product
+import multiprocessing as mp
+from pathlib import Path
+
+RESULTS_PATH = Path("./results")
+if not RESULTS_PATH.exists():
+    RESULTS_PATH.mkdir(parents=True)
 
 
 class ExponentialDistribution:
@@ -94,7 +100,7 @@ class DDM:
                 index=self._idx,
                 value=self._state_history[StateIndex.STATE, self._idx],
                 time=self._state_history[StateIndex.TIME, self._idx],
-                reward=harvest,
+                reward=harvest if harvest > 0 else 0.0,
                 is_rejected=False,
             )
         )
@@ -199,7 +205,8 @@ def run_with_params(
     size_length_distribution = ExponentialDistribution(
         scale=1.5, min_bound=0.5, max_bound=4
     )
-    for _ in track(range(n_sim), description="Running simulations..."):
+
+    for i in range(n_sim):
         run = RunResult(
             patch=Patch(reward_amount=reward_amount),
             ddm=DDM(drift_rate=drift_rate, noise_std=noise_std),
@@ -211,12 +218,12 @@ def run_with_params(
     fig = plt.figure(figsize=(12, 6))
 
     ax = fig.add_subplot(2, 3, 1)
-    ax.hist([r.n_sites_visited for r in runs], bins=np.arange(0, 20, 1, dtype=int))
+    ax.hist([r.n_sites_visited for r in runs], bins=np.arange(0, 40, 1, dtype=int))
     ax.set_xlabel("Number of Sites Visited")
     ax.set_ylabel("Count")
 
     ax = fig.add_subplot(2, 3, 2)
-    ax.hist([r.n_sites_rewarded for r in runs], bins=np.arange(0, 10, 1, dtype=int))
+    ax.hist([r.n_sites_rewarded for r in runs], bins=np.arange(0, 40, 1, dtype=int))
     ax.set_xlabel("Number of Sites Rewarded")
     ax.set_ylabel("Count")
 
@@ -252,14 +259,15 @@ def run_with_params(
             )
 
             outcomes = all_failures_x_outcome[trials, 1]
-            p_success[row, col] = outcomes.sum() / len(outcomes)
+            if len(outcomes) > 0:
+                p_success[row, col] = outcomes.sum() / len(outcomes)
 
     ax = fig.add_subplot(2, 3, 5)
     im = ax.imshow(
-        p_success, aspect="auto", origin="lower", cmap="viridis", vmin=0, vmax=1
+        p_success.T, aspect="auto", origin="lower", cmap="viridis", vmin=0, vmax=1
     )
-    ax.set_ylabel("Consecutive Failures")
-    ax.set_xlabel("Rewards collected")
+    ax.set_xlabel("Consecutive Failures")
+    ax.set_ylabel("Rewards collected")
     plt.colorbar(im, ax=ax)
 
     ax = fig.add_subplot(2, 3, 6)
@@ -267,20 +275,53 @@ def run_with_params(
     ax.set_xlabel("Reward  #")
     ax.set_ylabel("Reward Probability")
     ax.set_ylim(-0.05, 1.05)
+    plt.title(f"Reward {reward_amount}, Drift {drift_rate}, Noise {noise_std}")
+    plt.tight_layout()
     plt.savefig(
-        f"reward_{reward_amount}_drift{drift_rate}_noise{noise_std}.png", dpi=300
+        RESULTS_PATH / f"reward_{reward_amount}_drift{drift_rate}_noise{noise_std}.png",
+        dpi=300,
+    )
+    plt.close(fig)
+
+
+def run_simulation_worker(params):
+    """Worker function for multiprocessing - no progress bar per subprocess"""
+    n_sim, drift_rate, noise_std, reward_amount = params
+    run_with_params(
+        n_sim=n_sim,
+        drift_rate=drift_rate,
+        noise_std=noise_std,
+        reward_amount=reward_amount,
     )
 
 
 def main():
-    n_sim = 10_000
+    n_sim = 10000
     reward = [0.01, 0.05, 0.1, 0.2]
     drift_rate = [0.1, 0.25, 0.5]
-    noise_std = [0.01, 0.05, 0.1]
+    noise_std = [0, 0.01, 0.05, 0.1]
 
-    for r, d, n in product(reward, drift_rate, noise_std):
-        run_with_params(n_sim=n_sim, drift_rate=d, noise_std=n, reward_amount=r)
+    param_combinations = [
+        (n_sim, d, n, r) for r, d, n in product(reward, drift_rate, noise_std)
+    ]
+    total_combinations = len(param_combinations)
+
+    print(
+        f"Running {total_combinations} parameter combinations with {n_sim} simulations each..."
+    )
+    print(f"Total simulations: {total_combinations * n_sim:,}")
+
+    with Progress() as progress:
+        task = progress.add_task(
+            "[green]Processing parameter combinations...", total=total_combinations
+        )
+
+        completed = 0
+        with mp.Pool(processes=mp.cpu_count()) as pool:
+            for _ in pool.imap(run_simulation_worker, param_combinations):
+                completed += 1
+                progress.update(task, completed=completed)
 
 
 if __name__ == "__main__":
-    main()
+    main()  # Simple version
