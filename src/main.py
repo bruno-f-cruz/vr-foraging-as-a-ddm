@@ -17,14 +17,14 @@ class ExponentialDistribution:
     def __init__(
         self, scale: float = 1.0, min_bound: float = 0.5, max_bound: float = 5
     ) -> None:
-        def _sample() -> float:
-            drawn = np.random.exponential(scale=scale)
-            return max(min_bound, min(drawn, max_bound))
-
-        self._distribution = _sample
+        self.scale = scale
+        self.min_bound = min_bound
+        self.max_bound = max_bound
 
     def sample(self) -> float:
-        return self._distribution()
+        return max(
+            self.min_bound, min(np.random.exponential(scale=self.scale), self.max_bound)
+        )
 
 
 class StateIndex(enum.IntEnum):
@@ -200,11 +200,11 @@ def run_with_params(
     drift_rate: float = 0.25,
     noise_std: float = 0.05,
     reward_amount: float = 0.1,
+    site_distribution: ExponentialDistribution = ExponentialDistribution(
+        scale=1.5, min_bound=0.5, max_bound=4
+    ),
 ):
     runs: list[RunResult] = []
-    size_length_distribution = ExponentialDistribution(
-        scale=1.5, min_bound=0.5, max_bound=4
-    )
 
     for i in range(n_sim):
         run = RunResult(
@@ -212,7 +212,7 @@ def run_with_params(
             ddm=DDM(drift_rate=drift_rate, noise_std=noise_std),
         )
         while not run.ddm.has_ended():
-            run.ddm.travel(size_length_distribution.sample()).harvest(run.patch)
+            run.ddm.travel(site_distribution.sample()).harvest(run.patch)
         runs.append(run)
 
     fig = plt.figure(figsize=(12, 6))
@@ -275,10 +275,11 @@ def run_with_params(
     ax.set_xlabel("Reward  #")
     ax.set_ylabel("Reward Probability")
     ax.set_ylim(-0.05, 1.05)
-    plt.title(f"Reward {reward_amount}, Drift {drift_rate}, Noise {noise_std}")
-    plt.tight_layout()
+    fname = f"reward_{reward_amount}_drift{drift_rate}_noise{noise_std}_site{site_distribution.scale}.png"
+    fig.suptitle(fname.replace(".png", ""))
+    fig.tight_layout()
     plt.savefig(
-        RESULTS_PATH / f"reward_{reward_amount}_drift{drift_rate}_noise{noise_std}.png",
+        RESULTS_PATH / fname,
         dpi=300,
     )
     plt.close(fig)
@@ -286,12 +287,13 @@ def run_with_params(
 
 def run_simulation_worker(params):
     """Worker function for multiprocessing - no progress bar per subprocess"""
-    n_sim, drift_rate, noise_std, reward_amount = params
+    n_sim, drift_rate, noise_std, reward_amount, site_distribution = params
     run_with_params(
         n_sim=n_sim,
         drift_rate=drift_rate,
         noise_std=noise_std,
         reward_amount=reward_amount,
+        site_distribution=site_distribution,
     )
 
 
@@ -300,9 +302,15 @@ def main():
     reward = [0.01, 0.05, 0.1, 0.2]
     drift_rate = [0.1, 0.25, 0.5]
     noise_std = [0, 0.01, 0.05, 0.1]
+    site_distribution = [
+        ExponentialDistribution(scale=2, min_bound=2, max_bound=2),
+        ExponentialDistribution(scale=1.5, min_bound=0.5, max_bound=4),
+        ExponentialDistribution(scale=3.0, min_bound=1.0, max_bound=6),
+    ]
 
     param_combinations = [
-        (n_sim, d, n, r) for r, d, n in product(reward, drift_rate, noise_std)
+        (n_sim, d, n, r, site)
+        for r, d, n, site in product(reward, drift_rate, noise_std, site_distribution)
     ]
     total_combinations = len(param_combinations)
 
